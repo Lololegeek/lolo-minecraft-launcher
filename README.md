@@ -9,12 +9,12 @@ Launcher Windows vanilla pour Minecraft 26.2, en mode hors-ligne.
 - Choix de la RAM : 2, 4, 6, 8 ou 12 Go.
 - Catalogue des versions Mojang (releases et snapshots), installées à la demande.
 - Profils Fabric téléchargeables à la demande, sans mod préinstallé.
-- Minecraft 26.2 vanilla disponible immédiatement via le bundle autonome.
+- Minecraft 26.2 vanilla téléchargé à la demande, avec progression.
 - Sélection d'un skin PNG local, conservé par profil.
 - Aucun mod ni configuration existante n'est importé.
 - Données générées dans `%APPDATA%\\.lolo-mc`.
 - Bundle auto-extractible dans `LoloMinecraft26.2.exe`.
-- Setup auto-extractible qui installe le GUI et le bundle côte à côte dans `%LOCALAPPDATA%\\LoloLauncher`.
+- Setup auto-extractible léger qui installe uniquement le GUI dans `%LOCALAPPDATA%\\LoloLauncher`.
 
 Le mode hors-ligne utilise un profil local et un UUID déterministe. Un skin officiel
 Mojang nécessite une connexion Microsoft ; le choix PNG intégré est donc un stockage
@@ -30,10 +30,12 @@ Depuis PowerShell :
 ```
 
 Le setup final est `D:\Code 2\LoloLauncherSetup.exe`. Il crée les raccourcis
-Bureau et menu Démarrer, puis ouvre le GUI installé. `--no-launch` permet de
-tester uniquement l'installation.
+Bureau et menu Démarrer, puis ouvre le GUI installé. Minecraft est téléchargé
+au premier lancement. `--no-launch` permet de tester uniquement l'installation.
 
-L'application WinUI 3 est lancée depuis `D:\Code 2\LoloMinecraftGUI`, avec `LoloMinecraft26.2.exe` dans le dossier parent `D:\Code 2`.
+L'application WinUI 3 est lancée depuis `D:\Code 2\LoloMinecraftGUI`. Si un
+`LoloMinecraft26.2.exe` est placé à côté, il sera utilisé ; sinon le GUI installe
+Minecraft à la demande dans `.lolo-mc`.
 
 Les versions téléchargées, les bibliothèques, les assets et les profils Fabric sont
 stockés uniquement dans `%APPDATA%\\.lolo-mc`. Les binaires Minecraft restent exclus

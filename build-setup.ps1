@@ -2,12 +2,11 @@ $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $guiPublish = Join-Path (Split-Path -Parent $projectRoot) 'LoloMinecraftGUI'
-$gameBundle = Join-Path (Split-Path -Parent $projectRoot) 'LoloMinecraft26.2.exe'
-$package = Join-Path (Split-Path -Parent $projectRoot) 'LoloLauncher-Windows-v1.0.2.zip'
+$package = Join-Path (Split-Path -Parent $projectRoot) 'LoloLauncher-Windows-v1.0.4.zip'
 $setupPublish = Join-Path $projectRoot 'setup-publish'
 $output = Join-Path (Split-Path -Parent $projectRoot) 'LoloLauncherSetup.exe'
 
-foreach ($path in @($guiPublish, $gameBundle)) {
+foreach ($path in @($guiPublish)) {
     if (!(Test-Path -LiteralPath $path)) { throw "Fichier de release manquant : $path" }
 }
 
@@ -19,8 +18,6 @@ if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -F
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
     Get-ChildItem -LiteralPath $guiPublish -Force | Copy-Item -Destination $stage -Recurse -Force
-    Copy-Item -LiteralPath $gameBundle -Destination (Join-Path $stage 'LoloMinecraft26.2.exe') -Force
-
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::CreateFromDirectory(
         $stage,

@@ -16,6 +16,7 @@ public sealed partial class MainWindow : Window
     private readonly GameInstaller installer;
     private readonly GameLauncher gameLauncher;
     private readonly ModCatalogService modCatalog = new();
+    private readonly UpdateService updateService = new();
     private List<CatalogVersion> catalogVersions = [];
     private List<FabricLoader> fabricLoaders = [];
     private List<string> forgeVersions = [];
@@ -37,6 +38,8 @@ public sealed partial class MainWindow : Window
     private ListView modResults = null!;
     private Button modSearchButton = null!;
     private Button modInstallButton = null!;
+    private Button updateButton = null!;
+    private LauncherRelease? availableUpdate;
 
     public MainWindow()
     {
@@ -44,6 +47,7 @@ public sealed partial class MainWindow : Window
         gameLauncher = new GameLauncher(GameDataDirectory);
         BuildInterface();
         _ = LoadCatalogAsync();
+        _ = CheckForUpdatesAsync();
     }
 
     private void BuildInterface()
@@ -279,6 +283,14 @@ public sealed partial class MainWindow : Window
             false,
             "#A8A3B7",
             true));
+        updateButton = new Button
+        {
+            Content = "Rechercher une mise à jour",
+            Visibility = Visibility.Collapsed,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        updateButton.Click += UpdateButton_Click;
+        footer.Children.Add(updateButton);
         content.Children.Add(footer);
 
         var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = content };
@@ -324,6 +336,79 @@ public sealed partial class MainWindow : Window
             versionBox.Items.Add("Catalogue indisponible");
             versionBox.SelectedIndex = 0;
             ShowStatus($"Impossible de charger le catalogue : {ex.Message}", "#FCA5A5");
+        }
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            await Task.Delay(1200);
+            var release = await updateService.CheckAsync(CancellationToken.None);
+            if (release is null)
+                return;
+
+            availableUpdate = release;
+            updateButton.Content = $"Installer la mise à jour {release.Version}";
+            updateButton.Visibility = Visibility.Visible;
+
+            if (Content is not FrameworkElement root || root.XamlRoot is null)
+                return;
+
+            var dialog = new ContentDialog
+            {
+                Title = $"Mise à jour {release.Version} disponible",
+                Content = "Une nouvelle version du launcher est prête. Le setup va remplacer les fichiers puis relancer le GUI.",
+                PrimaryButtonText = "Mettre à jour",
+                CloseButtonText = "Plus tard",
+                XamlRoot = root.XamlRoot
+            };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+                await InstallUpdateAsync(release);
+        }
+        catch
+        {
+            // Une vérification distante indisponible ne doit pas empêcher de jouer.
+        }
+    }
+
+    private async void UpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (availableUpdate is not null)
+            await InstallUpdateAsync(availableUpdate);
+    }
+
+    private async Task InstallUpdateAsync(LauncherRelease release)
+    {
+        updateButton.IsEnabled = false;
+        launchButton.IsEnabled = false;
+        downloadProgressContainer.Visibility = Visibility.Visible;
+        UpdateDownloadProgress(0, null);
+        ShowStatus($"Téléchargement de la mise à jour {release.Version}…", "#C4B5FD");
+        try
+        {
+            var progress = new Progress<DownloadProgress>(download =>
+            {
+                if (download.TotalBytes is > 0)
+                    UpdateDownloadProgress(download.CompletedBytes, download.TotalBytes.Value);
+                ShowStatus(download.Label, "#C4B5FD");
+            });
+            var setup = await updateService.DownloadSetupAsync(release, progress, CancellationToken.None);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = setup,
+                UseShellExecute = true
+            });
+            ShowStatus("Mise à jour prête. Fermeture du GUI…", "#86EFAC");
+            await Task.Delay(300);
+            Close();
+        }
+        catch (Exception ex)
+        {
+            updateButton.IsEnabled = true;
+            launchButton.IsEnabled = true;
+            downloadProgressContainer.Visibility = Visibility.Collapsed;
+            ShowStatus($"Mise à jour impossible : {ex.Message}", "#FCA5A5");
         }
     }
 

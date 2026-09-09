@@ -98,9 +98,24 @@ internal static class SetupProgram
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            using var source = entry.Open();
-            using var target = File.Create(destination);
-            source.CopyTo(target);
+            var installed = false;
+            for (var attempt = 0; attempt < 40 && !installed; attempt++)
+            {
+                try
+                {
+                    using var source = entry.Open();
+                    using var target = File.Create(destination);
+                    source.CopyTo(target);
+                    installed = true;
+                }
+                catch (IOException) when (attempt < 39)
+                {
+                    Thread.Sleep(250);
+                }
+            }
+
+            if (!installed)
+                throw new IOException($"Le fichier ne peut pas être remplacé : {entry.Name}");
         }
     }
 
