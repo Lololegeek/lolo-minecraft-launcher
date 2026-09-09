@@ -14,7 +14,7 @@ public sealed record ModSearchResult(
     string Name,
     string Description,
     string? Slug,
-    int Downloads)
+    long Downloads)
 {
     public override string ToString() => $"{Name}  ·  {Downloads:N0} téléchargements\n{Description}";
 }
@@ -65,21 +65,36 @@ public sealed class ModCatalogService
 
     private async Task<IReadOnlyList<ModSearchResult>> SearchModrinthAsync(string query, string gameVersion, GameLoader loader, CancellationToken cancellationToken)
     {
-        var facets = JsonSerializer.Serialize(new[]
+        var strict = await SearchModrinthEndpointAsync(query, gameVersion, loader, true, cancellationToken);
+        return strict.Count > 0
+            ? strict
+            : await SearchModrinthEndpointAsync(query, gameVersion, loader, false, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ModSearchResult>> SearchModrinthEndpointAsync(
+        string query,
+        string gameVersion,
+        GameLoader loader,
+        bool restrictCompatibility,
+        CancellationToken cancellationToken)
+    {
+        var facetGroups = new List<string[]> { new[] { "project_type:mod" } };
+        if (restrictCompatibility)
         {
-            new[] { "project_type:mod" },
-            new[] { $"versions:{gameVersion}" },
-            new[] { $"categories:{LoaderFacet(loader)}" }
-        });
-        var url = $"https://api.modrinth.com/v2/search?query={Uri.EscapeDataString(query)}&facets={Uri.EscapeDataString(facets)}&limit=20";
+            facetGroups.Add(new[] { $"versions:{gameVersion}" });
+            facetGroups.Add(new[] { $"categories:{LoaderFacet(loader)}" });
+        }
+
+        var facets = JsonSerializer.Serialize(facetGroups);
+        var url = $"https://api.modrinth.com/v2/search?query={Uri.EscapeDataString(query)}&facets={Uri.EscapeDataString(facets)}&limit=20&index=downloads";
         using var document = await JsonDocument.ParseAsync(await http.GetStreamAsync(url, cancellationToken), cancellationToken: cancellationToken);
         return document.RootElement.GetProperty("hits").EnumerateArray().Select(hit => new ModSearchResult(
             ModSource.Modrinth,
             hit.GetProperty("project_id").GetString()!,
             hit.GetProperty("title").GetString()!,
-            hit.GetProperty("description").GetString() ?? "",
+            hit.TryGetProperty("description", out var description) ? description.GetString() ?? "" : "",
             hit.TryGetProperty("slug", out var slug) ? slug.GetString() : null,
-            hit.GetProperty("downloads").GetInt32())).ToList();
+            hit.TryGetProperty("downloads", out var downloads) ? downloads.GetInt64() : 0)).ToList();
     }
 
     private async Task<IReadOnlyList<ModSearchResult>> SearchCurseForgeAsync(

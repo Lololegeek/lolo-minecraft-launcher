@@ -255,7 +255,13 @@ public sealed partial class MainWindow : Window
 
         modsForm.Children.Add(Text("Source publique · Modrinth · aucune clé requise.", 12, false, "#86EFAC", true));
 
-        modResults = new ListView { Height = 170, SelectionMode = ListViewSelectionMode.Single };
+        modResults = new ListView
+        {
+            Height = 170,
+            SelectionMode = ListViewSelectionMode.Single,
+            DisplayMemberPath = nameof(ModSearchResult.Name),
+            Foreground = Brush("#FFFFFF")
+        };
         modsForm.Children.Add(modResults);
         modInstallButton = new Button { Content = "Installer le mod sélectionné", HorizontalAlignment = HorizontalAlignment.Stretch };
         modInstallButton.Click += ModInstallButton_Click;
@@ -549,6 +555,7 @@ public sealed partial class MainWindow : Window
                     previousMarkerLength,
                     username);
                 ShowStatus("Minecraft est lancé.", "#86EFAC");
+                await RunGameSessionAsync(bundleProcess, loaderType);
             }
             else
             {
@@ -569,9 +576,9 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(500);
                 if (gameProcess.HasExited)
                     throw new InvalidOperationException($"Minecraft s'est fermé avec le code {gameProcess.ExitCode}.");
+                ShowStatus("Minecraft est lancé.", "#86EFAC");
+                await RunGameSessionAsync(gameProcess, loaderType);
             }
-            await Task.Delay(250);
-            Close();
         }
         catch (Exception ex)
         {
@@ -643,6 +650,34 @@ public sealed partial class MainWindow : Window
         }
 
         throw new TimeoutException("Minecraft met trop longtemps à démarrer. Consulte lolo-launcher.log.");
+    }
+
+    private async Task RunGameSessionAsync(Process gameProcess, GameLoader loader)
+    {
+        AppWindow.Hide();
+        try
+        {
+            await gameProcess.WaitForExitAsync();
+        }
+        finally
+        {
+            AppWindow.Show();
+            launchButton.IsEnabled = true;
+            launchProgress.Visibility = Visibility.Collapsed;
+            downloadProgressContainer.Visibility = Visibility.Collapsed;
+
+            if (loader != GameLoader.Vanilla)
+            {
+                loaderBox.SelectedIndex = 0;
+                RefreshLoaderVersions();
+            }
+
+            ShowStatus(
+                loader == GameLoader.Vanilla
+                    ? "Minecraft est fermé. Prêt pour une nouvelle session."
+                    : $"Session {loader} terminée. Vanilla est sélectionné pour la prochaine session.",
+                "#A8A3B7");
+        }
     }
 
     private void UpdateDownloadProgress(long completedBytes, long? totalBytes)
