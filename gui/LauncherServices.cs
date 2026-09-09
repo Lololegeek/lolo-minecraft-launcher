@@ -6,6 +6,14 @@ using System.Text.Json;
 
 namespace LoloMinecraftGui;
 
+public enum GameLoader
+{
+    Vanilla,
+    Fabric,
+    Forge,
+    NeoForge
+}
+
 public sealed record CatalogVersion(string Id, string Type, DateTimeOffset ReleaseTime, string Url)
 {
     public override string ToString() => $"{Id}  ·  {Type}";
@@ -17,11 +25,17 @@ public sealed record FabricLoader(string Version, bool Stable)
 }
 
 public sealed record InstalledGame(string VersionId, string ProfileJsonPath, string? FabricLoaderVersion);
+public sealed record DownloadProgress(string Label, long CompletedBytes, long? TotalBytes)
+{
+    public static implicit operator DownloadProgress(string label) => new(label, 0, null);
+}
 
 public sealed class VersionCatalogService
 {
     private const string MojangManifestUrl = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     private const string FabricLoadersUrl = "https://meta.fabricmc.net/v2/versions/loader";
+    private const string ForgeMetadataUrl = "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml";
+    private const string NeoForgeMetadataUrl = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml";
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(2) };
 
     public VersionCatalogService()
@@ -61,6 +75,26 @@ public sealed class VersionCatalogService
             .ToList();
     }
 
+    public async Task<IReadOnlyList<string>> GetForgeVersionsAsync(CancellationToken cancellationToken)
+    {
+        return await GetMavenVersionsAsync(ForgeMetadataUrl, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<string>> GetNeoForgeVersionsAsync(CancellationToken cancellationToken)
+    {
+        return await GetMavenVersionsAsync(NeoForgeMetadataUrl, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<string>> GetMavenVersionsAsync(string url, CancellationToken cancellationToken)
+    {
+        var document = System.Xml.Linq.XDocument.Parse(await http.GetStringAsync(url, cancellationToken));
+        return document.Descendants("version")
+            .Select(version => version.Value)
+            .Where(version => !version.Contains("-RC", StringComparison.OrdinalIgnoreCase))
+            .Reverse()
+            .ToList();
+    }
+
     public async Task<JsonDocument> DownloadJsonAsync(string url, CancellationToken cancellationToken)
     {
         await using var stream = await http.GetStreamAsync(url, cancellationToken);
@@ -83,9 +117,9 @@ public sealed class GameInstaller
 
     public async Task<InstalledGame> InstallAsync(
         CatalogVersion version,
-        bool fabric,
-        string? fabricLoader,
-        IProgress<string>? progress,
+        GameLoader loader,
+        string? loaderVersion,
+        IProgress<DownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(gameDirectory);
@@ -98,30 +132,90 @@ public sealed class GameInstaller
         await File.WriteAllTextAsync(baseJsonPath, baseJson.RootElement.GetRawText(), cancellationToken);
         await DownloadVersionFilesAsync(version.Id, baseJson.RootElement, progress, cancellationToken);
 
-        if (fabric)
+        if (loader == GameLoader.Fabric)
         {
-            if (string.IsNullOrWhiteSpace(fabricLoader))
+            if (string.IsNullOrWhiteSpace(loaderVersion))
                 throw new InvalidOperationException("Aucun loader Fabric n'est sélectionné.");
 
-            var fabricId = $"fabric-loader-{fabricLoader}-{version.Id}";
+            var fabricId = $"fabric-loader-{loaderVersion}-{version.Id}";
             var fabricDirectory = Path.Combine(gameDirectory, "versions", fabricId);
             Directory.CreateDirectory(fabricDirectory);
             var fabricJsonPath = Path.Combine(fabricDirectory, $"{fabricId}.json");
-            var profileUrl = $"https://meta.fabricmc.net/v2/versions/loader/{Uri.EscapeDataString(version.Id)}/{Uri.EscapeDataString(fabricLoader)}/profile/json";
-            progress?.Report($"Préparation de Fabric {fabricLoader}…");
+            var profileUrl = $"https://meta.fabricmc.net/v2/versions/loader/{Uri.EscapeDataString(version.Id)}/{Uri.EscapeDataString(loaderVersion)}/profile/json";
+            progress?.Report($"Préparation de Fabric {loaderVersion}…");
             using var fabricJson = await catalog.DownloadJsonAsync(profileUrl, cancellationToken);
             await File.WriteAllTextAsync(fabricJsonPath, fabricJson.RootElement.GetRawText(), cancellationToken);
             await DownloadVersionFilesAsync(fabricId, fabricJson.RootElement, progress, cancellationToken);
-            return new InstalledGame(fabricId, fabricJsonPath, fabricLoader);
+            return new InstalledGame(fabricId, fabricJsonPath, loaderVersion);
+        }
+
+        if (loader is GameLoader.Forge or GameLoader.NeoForge)
+        {
+            if (string.IsNullOrWhiteSpace(loaderVersion))
+                throw new InvalidOperationException("Aucune version Forge n'est sélectionnée.");
+
+            return await InstallForgeLikeAsync(version, loader, loaderVersion, progress, cancellationToken);
         }
 
         return new InstalledGame(version.Id, baseJsonPath, null);
     }
 
+    private async Task<InstalledGame> InstallForgeLikeAsync(
+        CatalogVersion version,
+        GameLoader loader,
+        string loaderVersion,
+        IProgress<DownloadProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var group = loader == GameLoader.Forge ? "net/minecraftforge/forge" : "net/neoforged/neoforge";
+        var artifact = loader == GameLoader.Forge
+            ? $"forge-{loaderVersion}-installer.jar"
+            : $"neoforge-{loaderVersion}-installer.jar";
+        var repository = loader == GameLoader.Forge
+            ? "https://maven.minecraftforge.net"
+            : "https://maven.neoforged.net/releases";
+        var installerPath = Path.Combine(gameDirectory, "installers", artifact);
+        await DownloadFileAsync(
+            $"{repository}/{group}/{loaderVersion}/{artifact}",
+            installerPath,
+            null,
+            $"Installer {loader}",
+            progress,
+            cancellationToken);
+
+        progress?.Report($"Installation de {loader} {loaderVersion}…");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = GameLauncher.FindJavaPath(gameDirectory),
+            WorkingDirectory = gameDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("-jar");
+        startInfo.ArgumentList.Add(installerPath);
+        startInfo.ArgumentList.Add("--installClient");
+        startInfo.ArgumentList.Add(gameDirectory);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("L'installer n'a pas démarré.");
+        await process.WaitForExitAsync(cancellationToken);
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"L'installation de {loader} a échoué (code {process.ExitCode}).");
+
+        var installed = Directory.GetFiles(Path.Combine(gameDirectory, "versions"), "*.json", SearchOption.AllDirectories)
+            .Where(path => Path.GetFileNameWithoutExtension(path).Contains(loader == GameLoader.Forge ? "forge" : "neoforge", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+        if (installed is null)
+            throw new InvalidDataException($"L'installation de {loader} n'a pas produit de profil de lancement.");
+
+        return new InstalledGame(Path.GetFileNameWithoutExtension(installed), installed, loaderVersion);
+    }
+
     private async Task DownloadVersionFilesAsync(
         string versionId,
         JsonElement json,
-        IProgress<string>? progress,
+        IProgress<DownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
         if (json.TryGetProperty("downloads", out var downloads) && downloads.TryGetProperty("client", out var client))
@@ -182,7 +276,7 @@ public sealed class GameInstaller
     private async Task DownloadMavenLibraryAsync(
         JsonElement library,
         string mavenName,
-        IProgress<string>? progress,
+        IProgress<DownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
         var parts = mavenName.Split(':');
@@ -205,7 +299,7 @@ public sealed class GameInstaller
             cancellationToken);
     }
 
-    private async Task DownloadAssetsAsync(string indexPath, IProgress<string>? progress, CancellationToken cancellationToken)
+    private async Task DownloadAssetsAsync(string indexPath, IProgress<DownloadProgress>? progress, CancellationToken cancellationToken)
     {
         using var index = JsonDocument.Parse(await File.ReadAllTextAsync(indexPath, cancellationToken));
         if (!index.RootElement.TryGetProperty("objects", out var objects))
@@ -227,7 +321,7 @@ public sealed class GameInstaller
         JsonElement descriptor,
         string target,
         string label,
-        IProgress<string>? progress,
+        IProgress<DownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
         var url = descriptor.GetProperty("url").GetString()!;
@@ -240,19 +334,30 @@ public sealed class GameInstaller
         string target,
         string? expectedSha1,
         string label,
-        IProgress<string>? progress,
+        IProgress<DownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         if (expectedSha1 is not null && File.Exists(target) && await Sha1Async(target, cancellationToken) == expectedSha1)
             return;
 
-        progress?.Report($"Téléchargement · {label}");
+        progress?.Report(new DownloadProgress($"Téléchargement · {label}", 0, null));
         var temporary = target + ".download";
-        await using (var input = await http.GetStreamAsync(url, cancellationToken))
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var totalBytes = response.Content.Headers.ContentLength;
+        await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
         await using (var output = File.Create(temporary))
         {
-            await input.CopyToAsync(output, cancellationToken);
+            var buffer = new byte[128 * 1024];
+            long completedBytes = 0;
+            int read;
+            while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+            {
+                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                completedBytes += read;
+                progress?.Report(new DownloadProgress($"Téléchargement · {label}", completedBytes, totalBytes));
+            }
         }
 
         if (expectedSha1 is not null && await Sha1Async(temporary, cancellationToken) != expectedSha1)
@@ -306,7 +411,7 @@ public sealed class GameLauncher
     {
         using var json = JsonDocument.Parse(File.ReadAllText(game.ProfileJsonPath));
         var profile = ResolveProfile(json.RootElement);
-        var java = FindJava();
+        var java = FindJavaPath(gameDirectory);
         var natives = Path.Combine(gameDirectory, "natives", Sanitize(game.VersionId));
         Directory.CreateDirectory(natives);
         ExtractNatives(profile.Libraries, natives);
@@ -353,7 +458,7 @@ public sealed class GameLauncher
         }
     }
 
-    private string FindJava()
+    public static string FindJavaPath(string gameDirectory)
     {
         var candidates = new[]
         {

@@ -15,19 +15,28 @@ public sealed partial class MainWindow : Window
     private readonly VersionCatalogService catalog = new();
     private readonly GameInstaller installer;
     private readonly GameLauncher gameLauncher;
+    private readonly ModCatalogService modCatalog = new();
     private List<CatalogVersion> catalogVersions = [];
     private List<FabricLoader> fabricLoaders = [];
+    private List<string> forgeVersions = [];
+    private List<string> neoForgeVersions = [];
 
     private TextBox usernameBox = null!;
     private ComboBox ramBox = null!;
     private ComboBox versionBox = null!;
-    private CheckBox fabricBox = null!;
-    private ComboBox fabricLoaderBox = null!;
+    private ComboBox loaderBox = null!;
+    private ComboBox loaderVersionBox = null!;
     private Button launchButton = null!;
     private Button skinButton = null!;
     private TextBlock launchProgress = null!;
+    private Grid downloadProgressContainer = null!;
+    private Border downloadProgressFill = null!;
     private TextBlock statusText = null!;
     private TextBlock skinStatus = null!;
+    private TextBox modSearchBox = null!;
+    private ListView modResults = null!;
+    private Button modSearchButton = null!;
+    private Button modInstallButton = null!;
 
     public MainWindow()
     {
@@ -119,24 +128,27 @@ public sealed partial class MainWindow : Window
         };
         versionBox.Items.Add("Chargement du catalogue…");
         versionBox.SelectedIndex = 0;
+        versionBox.SelectionChanged += VersionBox_Changed;
         form.Children.Add(versionBox);
 
-        fabricBox = new CheckBox
+        loaderBox = new ComboBox
         {
-            Content = "Utiliser Fabric (loader uniquement, aucun mod inclus)",
-            Foreground = Brush("#FFFFFF")
+            Header = "Loader",
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
-        fabricBox.Checked += FabricBox_Changed;
-        fabricBox.Unchecked += FabricBox_Changed;
-        form.Children.Add(fabricBox);
+        foreach (var loader in new[] { "Vanilla", "Fabric", "Forge", "NeoForge" })
+            loaderBox.Items.Add(loader);
+        loaderBox.SelectedIndex = 0;
+        loaderBox.SelectionChanged += LoaderBox_Changed;
+        form.Children.Add(loaderBox);
 
-        fabricLoaderBox = new ComboBox
+        loaderVersionBox = new ComboBox
         {
-            Header = "Loader Fabric",
+            Header = "Version du loader",
             Visibility = Visibility.Collapsed,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
-        form.Children.Add(fabricLoaderBox);
+        form.Children.Add(loaderVersionBox);
 
         usernameBox = new TextBox
         {
@@ -181,6 +193,27 @@ public sealed partial class MainWindow : Window
         };
         form.Children.Add(launchProgress);
 
+        downloadProgressContainer = new Grid
+        {
+            Height = 6,
+            Visibility = Visibility.Collapsed
+        };
+        downloadProgressContainer.Children.Add(new Border
+        {
+            Background = Brush("#2C263B"),
+            CornerRadius = new CornerRadius(3)
+        });
+        downloadProgressFill = new Border
+        {
+            Width = 0,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Background = Brush("#8B5CF6"),
+            CornerRadius = new CornerRadius(3)
+        };
+        downloadProgressContainer.Children.Add(downloadProgressFill);
+        downloadProgressContainer.SizeChanged += (_, _) => UpdateDownloadProgress(0, null);
+        form.Children.Add(downloadProgressContainer);
+
         skinButton = new Button
         {
             Content = "Choisir un skin PNG local",
@@ -196,6 +229,39 @@ public sealed partial class MainWindow : Window
         form.Children.Add(statusText);
         panel.Child = form;
         content.Children.Add(panel);
+
+        var modsPanel = new Border
+        {
+            Background = Brush("#171421"),
+            CornerRadius = new CornerRadius(16),
+            Padding = new Thickness(24),
+            BorderBrush = Brush("#2C263B"),
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(0, 18, 0, 0)
+        };
+        var modsForm = new StackPanel { Spacing = 12 };
+        modsForm.Children.Add(Text("BIBLIOTHÈQUE DE MODS", 11, true, "#C4B5FD"));
+        modsForm.Children.Add(Text("Recherche des mods compatibles avec la version et le loader choisis.", 12, false, "#A8A3B7", true));
+        var modSearchLine = new Grid();
+        modSearchLine.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        modSearchLine.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        modSearchBox = new TextBox { PlaceholderText = "Rechercher un mod…" };
+        modSearchLine.Children.Add(modSearchBox);
+        modSearchButton = new Button { Content = "Rechercher", Margin = new Thickness(10, 0, 0, 0) };
+        modSearchButton.Click += ModSearchButton_Click;
+        Grid.SetColumn(modSearchButton, 1);
+        modSearchLine.Children.Add(modSearchButton);
+        modsForm.Children.Add(modSearchLine);
+
+        modsForm.Children.Add(Text("Source publique · Modrinth · aucune clé requise.", 12, false, "#86EFAC", true));
+
+        modResults = new ListView { Height = 170, SelectionMode = ListViewSelectionMode.Single };
+        modsForm.Children.Add(modResults);
+        modInstallButton = new Button { Content = "Installer le mod sélectionné", HorizontalAlignment = HorizontalAlignment.Stretch };
+        modInstallButton.Click += ModInstallButton_Click;
+        modsForm.Children.Add(modInstallButton);
+        modsPanel.Child = modsForm;
+        content.Children.Add(modsPanel);
 
         var footer = new StackPanel { Margin = new Thickness(4, 18, 4, 0), Spacing = 4 };
         footer.Children.Add(Text("Installation isolée", 13, true, "#FFFFFF"));
@@ -225,12 +291,16 @@ public sealed partial class MainWindow : Window
         {
             var versionsTask = catalog.GetMinecraftVersionsAsync(CancellationToken.None);
             var loadersTask = catalog.GetFabricLoadersAsync(CancellationToken.None);
-            await Task.WhenAll(versionsTask, loadersTask);
+            var forgeTask = catalog.GetForgeVersionsAsync(CancellationToken.None);
+            var neoForgeTask = catalog.GetNeoForgeVersionsAsync(CancellationToken.None);
+            await Task.WhenAll(versionsTask, loadersTask, forgeTask, neoForgeTask);
             catalogVersions = versionsTask.Result
                 .OrderByDescending(version => version.Type == "release")
                 .ThenByDescending(version => version.ReleaseTime)
                 .ToList();
             fabricLoaders = loadersTask.Result.ToList();
+            forgeVersions = forgeTask.Result.ToList();
+            neoForgeVersions = neoForgeTask.Result.ToList();
 
             versionBox.Items.Clear();
             foreach (var version in catalogVersions)
@@ -238,11 +308,7 @@ public sealed partial class MainWindow : Window
             var preferredVersion = catalogVersions.FindIndex(version => version.Id == "26.2");
             versionBox.SelectedIndex = preferredVersion >= 0 ? preferredVersion : 0;
 
-            fabricLoaderBox.Items.Clear();
-            foreach (var loader in fabricLoaders)
-                fabricLoaderBox.Items.Add(loader);
-            if (fabricLoaderBox.Items.Count > 0)
-                fabricLoaderBox.SelectedIndex = 0;
+            RefreshLoaderVersions();
 
             ShowStatus($"Catalogue prêt · {catalogVersions.Count} versions disponibles.", "#86EFAC");
         }
@@ -255,9 +321,59 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void FabricBox_Changed(object sender, RoutedEventArgs e)
+    private void LoaderBox_Changed(object sender, SelectionChangedEventArgs e)
     {
-        fabricLoaderBox.Visibility = fabricBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        RefreshLoaderVersions();
+    }
+
+    private void VersionBox_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        RefreshLoaderVersions();
+    }
+
+    private void RefreshLoaderVersions()
+    {
+        if (loaderBox is null || loaderVersionBox is null)
+            return;
+
+        var loader = SelectedLoader();
+        loaderVersionBox.Items.Clear();
+        if (loader == GameLoader.Vanilla)
+        {
+            loaderVersionBox.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        loaderVersionBox.Visibility = Visibility.Visible;
+        if (loader == GameLoader.Fabric)
+        {
+            foreach (var item in fabricLoaders)
+                loaderVersionBox.Items.Add(item);
+        }
+        else
+        {
+            var source = loader == GameLoader.Forge ? forgeVersions : neoForgeVersions;
+            foreach (var item in FilterLoaderVersions(source))
+                loaderVersionBox.Items.Add(item);
+        }
+
+        if (loaderVersionBox.Items.Count > 0)
+            loaderVersionBox.SelectedIndex = 0;
+    }
+
+    private IEnumerable<string> FilterLoaderVersions(IEnumerable<string> source)
+    {
+        if (versionBox.SelectedItem is not CatalogVersion gameVersion)
+            return source;
+
+        if (SelectedLoader() == GameLoader.Forge)
+            return source.Where(version => version.StartsWith(gameVersion.Id + "-", StringComparison.OrdinalIgnoreCase));
+
+        var neoPrefix = gameVersion.Id.StartsWith("1.", StringComparison.Ordinal)
+            ? gameVersion.Id[2..]
+            : gameVersion.Id;
+        var compatible = source.Where(version => version.StartsWith(neoPrefix + ".", StringComparison.OrdinalIgnoreCase));
+        return compatible.Any() ? compatible : source;
     }
 
     private async void SkinButton_Click(object sender, RoutedEventArgs e)
@@ -283,6 +399,90 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void ModSearchButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (versionBox.SelectedItem is not CatalogVersion version)
+        {
+            ShowStatus("Sélectionne une version Minecraft avant de chercher un mod.", "#FCA5A5");
+            return;
+        }
+
+        modSearchButton.IsEnabled = false;
+        ShowStatus("Recherche des mods compatibles…", "#C4B5FD");
+        try
+        {
+            var results = await modCatalog.SearchAsync(
+                modSearchBox.Text,
+                version.Id,
+                SelectedLoader(),
+                ModSource.Modrinth,
+                null,
+                CancellationToken.None);
+            modResults.Items.Clear();
+            foreach (var result in results)
+                modResults.Items.Add(result);
+            ShowStatus($"{results.Count} résultat(s) trouvé(s).", "#86EFAC");
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Recherche impossible : {ex.Message}", "#FCA5A5");
+        }
+        finally
+        {
+            modSearchButton.IsEnabled = true;
+        }
+    }
+
+    private async void ModInstallButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (modResults.SelectedItem is not ModSearchResult mod || versionBox.SelectedItem is not CatalogVersion version)
+        {
+            ShowStatus("Sélectionne un mod dans les résultats.", "#FCA5A5");
+            return;
+        }
+
+        var loader = SelectedLoader();
+        if (loader == GameLoader.Vanilla)
+        {
+            ShowStatus("Un mod nécessite Fabric, Forge ou NeoForge.", "#FCA5A5");
+            return;
+        }
+
+        modInstallButton.IsEnabled = false;
+        downloadProgressContainer.Visibility = Visibility.Visible;
+        UpdateDownloadProgress(0, null);
+        try
+        {
+            var progress = new Progress<DownloadProgress>(download =>
+            {
+                if (download.TotalBytes is > 0)
+                {
+                    UpdateDownloadProgress(download.CompletedBytes, download.TotalBytes.Value);
+                }
+                else UpdateDownloadProgress(0, null);
+                ShowStatus(download.Label, "#C4B5FD");
+            });
+            await modCatalog.InstallAsync(
+                mod,
+                version.Id,
+                loader,
+                null,
+                Path.Combine(GameDataDirectory, "mods"),
+                progress,
+                CancellationToken.None);
+            ShowStatus($"{mod.Name} installé dans .lolo-mc\\mods.", "#86EFAC");
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Installation impossible : {ex.Message}", "#FCA5A5");
+        }
+        finally
+        {
+            modInstallButton.IsEnabled = true;
+            downloadProgressContainer.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private async void LaunchButton_Click(object sender, RoutedEventArgs e)
     {
         var username = usernameBox.Text.Trim();
@@ -305,15 +505,22 @@ public sealed partial class MainWindow : Window
 
         launchButton.IsEnabled = false;
         launchProgress.Visibility = Visibility.Visible;
+        downloadProgressContainer.Visibility = Visibility.Visible;
+        UpdateDownloadProgress(0, null);
         ShowStatus($"Préparation de Minecraft {version.Id}…", "#C4B5FD");
 
         try
         {
             await Task.Delay(120);
-            var fabric = fabricBox.IsChecked == true;
-            var loader = fabricLoaderBox.SelectedItem is FabricLoader selectedLoader ? selectedLoader.Version : null;
+            var loaderType = SelectedLoader();
+            var loader = loaderVersionBox.SelectedItem switch
+            {
+                FabricLoader selectedFabric => selectedFabric.Version,
+                string selectedVersion => selectedVersion,
+                _ => null
+            };
             var bundle = FindBundle();
-            if (!fabric && version.Id == "26.2" && bundle is not null)
+            if (loaderType == GameLoader.Vanilla && version.Id == "26.2" && bundle is not null)
             {
                 var startInfo = new ProcessStartInfo
                 {
@@ -329,8 +536,19 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                var progress = new Progress<string>(message => ShowStatus(message, "#C4B5FD"));
-                var installed = await installer.InstallAsync(version, fabric, loader, progress, CancellationToken.None);
+                var progress = new Progress<DownloadProgress>(download =>
+                {
+                    if (download.TotalBytes is > 0)
+                    {
+                        UpdateDownloadProgress(download.CompletedBytes, download.TotalBytes.Value);
+                    }
+                    else
+                    {
+                        UpdateDownloadProgress(0, null);
+                    }
+                    ShowStatus(download.Label, "#C4B5FD");
+                });
+                var installed = await installer.InstallAsync(version, loaderType, loader, progress, CancellationToken.None);
                 gameLauncher.Start(installed, username, ram);
             }
             Close();
@@ -339,6 +557,7 @@ public sealed partial class MainWindow : Window
         {
             launchButton.IsEnabled = true;
             launchProgress.Visibility = Visibility.Collapsed;
+            downloadProgressContainer.Visibility = Visibility.Collapsed;
             ShowStatus($"Lancement impossible : {ex.Message}", "#FCA5A5");
         }
     }
@@ -351,11 +570,33 @@ public sealed partial class MainWindow : Window
         return 4;
     }
 
+    private GameLoader SelectedLoader()
+    {
+        return loaderBox.SelectedItem?.ToString() switch
+        {
+            "Fabric" => GameLoader.Fabric,
+            "Forge" => GameLoader.Forge,
+            "NeoForge" => GameLoader.NeoForge,
+            _ => GameLoader.Vanilla
+        };
+    }
+
     private void ShowStatus(string message, string color)
     {
         statusText.Text = message;
         statusText.Foreground = Brush(color);
         statusText.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateDownloadProgress(long completedBytes, long? totalBytes)
+    {
+        if (downloadProgressContainer.ActualWidth <= 0)
+            return;
+
+        var ratio = totalBytes is > 0
+            ? Math.Clamp((double)completedBytes / totalBytes.Value, 0.02, 1)
+            : 0.28;
+        downloadProgressFill.Width = downloadProgressContainer.ActualWidth * ratio;
     }
 
     private static TextBlock Text(string value, double size, bool semiBold, string color, bool wrap = false)
