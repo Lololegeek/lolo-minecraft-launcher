@@ -16,6 +16,7 @@ public sealed partial class MainWindow : Window
     private readonly GameInstaller installer;
     private readonly GameLauncher gameLauncher;
     private readonly ModCatalogService modCatalog = new();
+    private readonly ModpackInstaller modpackInstaller = new();
     private readonly UpdateService updateService = new();
     private List<CatalogVersion> catalogVersions = [];
     private List<FabricLoader> fabricLoaders = [];
@@ -39,7 +40,9 @@ public sealed partial class MainWindow : Window
     private Button modSearchButton = null!;
     private Button modInstallButton = null!;
     private Button updateButton = null!;
+    private Button modpackButton = null!;
     private LauncherRelease? availableUpdate;
+    private ImportedModpack? activeModpack;
 
     public MainWindow()
     {
@@ -48,6 +51,7 @@ public sealed partial class MainWindow : Window
         BuildInterface();
         _ = LoadCatalogAsync();
         _ = CheckForUpdatesAsync();
+        _ = RestoreModpackAsync();
     }
 
     private void BuildInterface()
@@ -176,6 +180,14 @@ public sealed partial class MainWindow : Window
         Grid.SetColumn(ramBox, 1);
         ramGrid.Children.Add(ramBox);
         form.Children.Add(ramGrid);
+
+        modpackButton = new Button
+        {
+            Content = "Importer un modpack .zip",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        modpackButton.Click += ModpackButton_Click;
+        form.Children.Add(modpackButton);
 
         launchButton = new Button
         {
@@ -325,6 +337,8 @@ public sealed partial class MainWindow : Window
                 versionBox.Items.Add(version);
             var preferredVersion = catalogVersions.FindIndex(version => version.Id == "26.2");
             versionBox.SelectedIndex = preferredVersion >= 0 ? preferredVersion : 0;
+            if (activeModpack is not null)
+                ApplyModpackSelection(activeModpack);
 
             RefreshLoaderVersions();
 
@@ -336,6 +350,106 @@ public sealed partial class MainWindow : Window
             versionBox.Items.Add("Catalogue indisponible");
             versionBox.SelectedIndex = 0;
             ShowStatus($"Impossible de charger le catalogue : {ex.Message}", "#FCA5A5");
+        }
+    }
+
+    private async void ModpackButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileOpenPicker();
+            picker.FileTypeFilter.Add(".zip");
+            var windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, windowHandle);
+            var file = await picker.PickSingleFileAsync();
+            if (file is null)
+                return;
+
+            launchButton.IsEnabled = false;
+            modpackButton.IsEnabled = false;
+            downloadProgressContainer.Visibility = Visibility.Visible;
+            UpdateDownloadProgress(0, null);
+            ShowStatus($"Import de {file.Name}…", "#C4B5FD");
+            var progress = new Progress<DownloadProgress>(download =>
+            {
+                if (download.TotalBytes is > 0)
+                    UpdateDownloadProgress(download.CompletedBytes, download.TotalBytes.Value);
+                ShowStatus(download.Label, "#C4B5FD");
+            });
+            activeModpack = await modpackInstaller.ImportAsync(
+                file.Path,
+                Path.Combine(GameDataDirectory, "modpacks"),
+                progress,
+                CancellationToken.None);
+            await File.WriteAllTextAsync(
+                Path.Combine(GameDataDirectory, "active-modpack.txt"),
+                activeModpack.Directory,
+                CancellationToken.None);
+            ApplyModpackSelection(activeModpack);
+            modpackButton.Content = $"Modpack chargé · {activeModpack.Name}";
+            ShowStatus(
+                $"{activeModpack.Name} prêt · {activeModpack.ModCount} mods · {activeModpack.Loader} {activeModpack.LoaderVersion}",
+                "#86EFAC");
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Import du modpack impossible : {ex.Message}", "#FCA5A5");
+        }
+        finally
+        {
+            launchButton.IsEnabled = true;
+            modpackButton.IsEnabled = true;
+            downloadProgressContainer.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async Task RestoreModpackAsync()
+    {
+        try
+        {
+            var activePathFile = Path.Combine(GameDataDirectory, "active-modpack.txt");
+            if (!File.Exists(activePathFile))
+                return;
+            var profileDirectory = File.ReadAllText(activePathFile).Trim();
+            if (string.IsNullOrWhiteSpace(profileDirectory))
+                return;
+            var modpack = await modpackInstaller.LoadExistingAsync(profileDirectory, CancellationToken.None);
+            if (modpack is null)
+                return;
+            activeModpack = modpack;
+            modpackButton.Content = $"Modpack chargé · {modpack.Name}";
+            ApplyModpackSelection(modpack);
+            ShowStatus(
+                $"Modpack restauré · {modpack.ModCount} mods · {modpack.Loader} {modpack.LoaderVersion}",
+                "#86EFAC");
+        }
+        catch
+        {
+            // A missing or incomplete profile can be imported again manually.
+        }
+    }
+
+    private void ApplyModpackSelection(ImportedModpack modpack)
+    {
+        var version = catalogVersions.FirstOrDefault(item => item.Id == modpack.MinecraftVersion);
+        if (version is not null)
+            versionBox.SelectedItem = version;
+
+        loaderBox.SelectedItem = modpack.Loader switch
+        {
+            GameLoader.Fabric => "Fabric",
+            GameLoader.Forge => "Forge",
+            GameLoader.NeoForge => "NeoForge",
+            _ => "Vanilla"
+        };
+        RefreshLoaderVersions();
+        for (var index = 0; index < loaderVersionBox.Items.Count; index++)
+        {
+            if (loaderVersionBox.Items[index]?.ToString()?.StartsWith(modpack.LoaderVersion, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                loaderVersionBox.SelectedIndex = index;
+                break;
+            }
         }
     }
 
@@ -610,8 +724,20 @@ public sealed partial class MainWindow : Window
                 string selectedVersion => selectedVersion,
                 _ => null
             };
+            var launchDirectory = activeModpack?.Directory ?? GameDataDirectory;
+            var launchInstaller = activeModpack is null
+                ? installer
+                : new GameInstaller(launchDirectory, catalog);
+            var launchGameLauncher = activeModpack is null
+                ? gameLauncher
+                : new GameLauncher(launchDirectory);
+            if (activeModpack is not null)
+            {
+                loaderType = activeModpack.Loader;
+                loader = activeModpack.LoaderVersion;
+            }
             var bundle = FindBundle();
-            if (loaderType == GameLoader.Vanilla && version.Id == "26.2" && bundle is not null)
+            if (activeModpack is null && loaderType == GameLoader.Vanilla && version.Id == "26.2" && bundle is not null)
             {
                 var launchMarker = Path.Combine(GameDataDirectory, "lolo-launcher-started.txt");
                 var previousMarkerWrite = File.Exists(launchMarker)
@@ -640,7 +766,7 @@ public sealed partial class MainWindow : Window
                     previousMarkerLength,
                     username);
                 ShowStatus("Minecraft est lancé.", "#86EFAC");
-                await RunGameSessionAsync(bundleProcess, loaderType);
+                await RunGameSessionAsync(bundleProcess, loaderType, true);
             }
             else
             {
@@ -656,13 +782,13 @@ public sealed partial class MainWindow : Window
                     }
                     ShowStatus(download.Label, "#C4B5FD");
                 });
-                var installed = await installer.InstallAsync(version, loaderType, loader, progress, CancellationToken.None);
-                var gameProcess = gameLauncher.Start(installed, username, ram);
+                var installed = await launchInstaller.InstallAsync(version, loaderType, loader, progress, CancellationToken.None);
+                var gameProcess = launchGameLauncher.Start(installed, username, ram);
                 await Task.Delay(500);
                 if (gameProcess.HasExited)
                     throw new InvalidOperationException($"Minecraft s'est fermé avec le code {gameProcess.ExitCode}.");
                 ShowStatus("Minecraft est lancé.", "#86EFAC");
-                await RunGameSessionAsync(gameProcess, loaderType);
+                await RunGameSessionAsync(gameProcess, loaderType, activeModpack is null);
             }
         }
         catch (Exception ex)
@@ -737,7 +863,7 @@ public sealed partial class MainWindow : Window
         throw new TimeoutException("Minecraft met trop longtemps à démarrer. Consulte lolo-launcher.log.");
     }
 
-    private async Task RunGameSessionAsync(Process gameProcess, GameLoader loader)
+    private async Task RunGameSessionAsync(Process gameProcess, GameLoader loader, bool resetToVanilla)
     {
         AppWindow.Hide();
         try
@@ -751,7 +877,7 @@ public sealed partial class MainWindow : Window
             launchProgress.Visibility = Visibility.Collapsed;
             downloadProgressContainer.Visibility = Visibility.Collapsed;
 
-            if (loader != GameLoader.Vanilla)
+            if (resetToVanilla && loader != GameLoader.Vanilla)
             {
                 loaderBox.SelectedIndex = 0;
                 RefreshLoaderVersions();

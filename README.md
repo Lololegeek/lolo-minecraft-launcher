@@ -10,6 +10,7 @@ Launcher Windows vanilla pour Minecraft 26.2, en mode hors-ligne.
 - Catalogue des versions Mojang (releases et snapshots), installées à la demande.
 - Profils Fabric téléchargeables à la demande, sans mod préinstallé.
 - Minecraft 26.2 vanilla téléchargé à la demande, avec progression.
+- Import de modpacks CurseForge `.zip` avec overrides, mods et loader principal.
 - Sélection d'un skin PNG local, conservé par profil.
 - Aucun mod ni configuration existante n'est importé.
 - Données générées dans `%APPDATA%\\.lolo-mc`.

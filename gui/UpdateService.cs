@@ -6,7 +6,7 @@ public sealed record LauncherRelease(Version Version, string DownloadUrl);
 
 public sealed class UpdateService
 {
-    public const string CurrentVersion = "1.0.4";
+    public const string CurrentVersion = "1.0.5";
 
     private const string LatestReleaseUrl =
         "https://api.github.com/repos/Lololegeek/lolo-minecraft-launcher/releases/latest";

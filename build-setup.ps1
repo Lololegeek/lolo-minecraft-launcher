@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $guiPublish = Join-Path (Split-Path -Parent $projectRoot) 'LoloMinecraftGUI'
-$package = Join-Path (Split-Path -Parent $projectRoot) 'LoloLauncher-Windows-v1.0.4.zip'
+$package = Join-Path (Split-Path -Parent $projectRoot) 'LoloLauncher-Windows-v1.0.5.zip'
 $setupPublish = Join-Path $projectRoot 'setup-publish'
 $output = Join-Path (Split-Path -Parent $projectRoot) 'LoloLauncherSetup.exe'
 
