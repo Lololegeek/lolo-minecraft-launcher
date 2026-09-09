@@ -1,0 +1,14 @@
+bin/
+obj/
+publish/
+staging/
+offline-launcher/bin/
+offline-launcher/obj/
+offline-launcher/publish/
+offline-launcher/staging/
+gui/bin/
+gui/obj/
+gui/publish/
+LoloMinecraftGUI/
+*.zip
+LoloMinecraft26.2.exe
