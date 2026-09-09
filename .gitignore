@@ -1,6 +1,7 @@
 bin/
 obj/
 publish/
+setup-publish/
 staging/
 offline-launcher/bin/
 offline-launcher/obj/
@@ -12,3 +13,5 @@ gui/publish/
 LoloMinecraftGUI/
 *.zip
 LoloMinecraft26.2.exe
+LoloLauncherSetup.exe
+*.pdb

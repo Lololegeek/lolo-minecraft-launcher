@@ -14,6 +14,7 @@ Launcher Windows vanilla pour Minecraft 26.2, en mode hors-ligne.
 - Aucun mod ni configuration existante n'est importé.
 - Données générées dans `%APPDATA%\\.lolo-mc`.
 - Bundle auto-extractible dans `LoloMinecraft26.2.exe`.
+- Setup auto-extractible qui installe le GUI et le bundle côte à côte dans `%LOCALAPPDATA%\\LoloLauncher`.
 
 Le mode hors-ligne utilise un profil local et un UUID déterministe. Un skin officiel
 Mojang nécessite une connexion Microsoft ; le choix PNG intégré est donc un stockage
@@ -25,8 +26,12 @@ Depuis PowerShell :
 
 ```powershell
 .\build.ps1
-dotnet publish .\gui\LoloMinecraftGui.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -o ..\LoloMinecraftGUI
+.\build-setup.ps1
 ```
+
+Le setup final est `D:\Code 2\LoloLauncherSetup.exe`. Il crée les raccourcis
+Bureau et menu Démarrer, puis ouvre le GUI installé. `--no-launch` permet de
+tester uniquement l'installation.
 
 L'application WinUI 3 est lancée depuis `D:\Code 2\LoloMinecraftGUI`, avec `LoloMinecraft26.2.exe` dans le dossier parent `D:\Code 2`.
 

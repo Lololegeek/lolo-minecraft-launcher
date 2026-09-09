@@ -365,6 +365,11 @@ internal static class Program
             Directory.CreateDirectory(Path.Combine(natives, "lwjgl"));
             Directory.CreateDirectory(Path.Combine(natives, "netty"));
 
+            File.WriteAllText(
+                Path.Combine(gameDirectory, "lolo-launcher-started.txt"),
+                $"Minecraft {version} — pseudo {username}\nDémarré le {DateTime.Now:O}",
+                Encoding.UTF8);
+
             using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Java n'a pas pu démarrer.");
             var outputTask = process.StandardOutput.ReadToEndAsync();
             var errorTask = process.StandardError.ReadToEndAsync();

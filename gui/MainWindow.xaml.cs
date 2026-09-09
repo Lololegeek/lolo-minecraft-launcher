@@ -522,6 +522,13 @@ public sealed partial class MainWindow : Window
             var bundle = FindBundle();
             if (loaderType == GameLoader.Vanilla && version.Id == "26.2" && bundle is not null)
             {
+                var launchMarker = Path.Combine(GameDataDirectory, "lolo-launcher-started.txt");
+                var previousMarkerWrite = File.Exists(launchMarker)
+                    ? File.GetLastWriteTimeUtc(launchMarker)
+                    : DateTime.MinValue;
+                var previousMarkerLength = File.Exists(launchMarker)
+                    ? new FileInfo(launchMarker).Length
+                    : -1;
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = bundle,
@@ -532,7 +539,16 @@ public sealed partial class MainWindow : Window
                 startInfo.ArgumentList.Add(username);
                 startInfo.ArgumentList.Add("--ram");
                 startInfo.ArgumentList.Add(ram.ToString());
-                Process.Start(startInfo);
+                var bundleProcess = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Le launcher Minecraft n'a pas pu démarrer.");
+                ShowStatus("Extraction terminée, démarrage de Minecraft…", "#C4B5FD");
+                await WaitForBundleStartAsync(
+                    bundleProcess,
+                    launchMarker,
+                    previousMarkerWrite,
+                    previousMarkerLength,
+                    username);
+                ShowStatus("Minecraft est lancé.", "#86EFAC");
             }
             else
             {
@@ -549,8 +565,12 @@ public sealed partial class MainWindow : Window
                     ShowStatus(download.Label, "#C4B5FD");
                 });
                 var installed = await installer.InstallAsync(version, loaderType, loader, progress, CancellationToken.None);
-                gameLauncher.Start(installed, username, ram);
+                var gameProcess = gameLauncher.Start(installed, username, ram);
+                await Task.Delay(500);
+                if (gameProcess.HasExited)
+                    throw new InvalidOperationException($"Minecraft s'est fermé avec le code {gameProcess.ExitCode}.");
             }
+            await Task.Delay(250);
             Close();
         }
         catch (Exception ex)
@@ -586,6 +606,43 @@ public sealed partial class MainWindow : Window
         statusText.Text = message;
         statusText.Foreground = Brush(color);
         statusText.Visibility = Visibility.Visible;
+    }
+
+    private static async Task WaitForBundleStartAsync(
+        Process bundleProcess,
+        string markerPath,
+        DateTime previousMarkerWrite,
+        long previousMarkerLength,
+        string username)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(90);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (bundleProcess.HasExited)
+                throw new InvalidOperationException("Le launcher Minecraft s'est arrêté avant le démarrage du jeu.");
+
+            if (File.Exists(markerPath))
+            {
+                var markerInfo = new FileInfo(markerPath);
+                if (markerInfo.LastWriteTimeUtc > previousMarkerWrite || markerInfo.Length != previousMarkerLength)
+                {
+                    try
+                    {
+                        var marker = await File.ReadAllTextAsync(markerPath);
+                        if (marker.Contains(username, StringComparison.Ordinal))
+                            return;
+                    }
+                    catch (IOException)
+                    {
+                        // The standalone launcher can still be replacing the marker.
+                    }
+                }
+            }
+
+            await Task.Delay(400);
+        }
+
+        throw new TimeoutException("Minecraft met trop longtemps à démarrer. Consulte lolo-launcher.log.");
     }
 
     private void UpdateDownloadProgress(long completedBytes, long? totalBytes)
